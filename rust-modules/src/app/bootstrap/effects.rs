@@ -169,6 +169,8 @@ fn content_request(request: &plx_screens::registry::ContentReq) -> Result<Value,
     use plx_screens::registry::{ContentPanel, ContentReq};
     Ok(match request {
         ContentReq::Push(arg) => json!({"push":content(arg)}),
+        ContentReq::OpenShow { sid, rk, season } =>
+            json!({"open_show":{"sid":sid.raw(),"rk":rk,"season":season}}),
         ContentReq::Present(arg) => json!({"present":content(arg)}),
         ContentReq::Back => json!("back"),
         ContentReq::PreviewStart { sid, rk, part, vcodec, acodec, title } =>
@@ -369,6 +371,8 @@ mod tests {
                 vcodec: "h264".into(), acodec: "aac".into(), title: "s12345678".into() },
                 json!({"preview_start":{"sid":7,"rk":"1001","part":"/part",
                     "vcodec":"h264","acodec":"aac","title":"s12345678"}})),
+            (ContentReq::OpenShow { sid, rk: "500".into(), season: 3 },
+                json!({"open_show":{"sid":7,"rk":"500","season":3}})),
             (ContentReq::PreviewStop, json!("preview_stop")),
             (ContentReq::PreviewTransport(None), json!({"preview_transport":null})),
             (ContentReq::PreviewTransport(Some(true)), json!({"preview_transport":true})),

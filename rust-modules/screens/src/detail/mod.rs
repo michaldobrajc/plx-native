@@ -223,8 +223,8 @@ pub struct DetailScreen {
     cast: Shelf,
     tabs: TabStrip,
     season_pop: CtlPop<1>,
-    ctl_pop: CtlPop<5>,
-    disc_unfurl: [Spring; 3],
+    ctl_pop: CtlPop<{ hero::HERO_MAX }>,
+    disc_unfurl: [Spring; hero::DISC_SLOTS],
     season_metrics: season::Metrics,
     about_rows: about::Rows,
     /// The page's own keyed ground. Deliberately a bare [`AmbientWash`] and not the shared
@@ -446,7 +446,7 @@ impl DetailScreen {
             tabs: TabStrip::new(),
             season_pop: CtlPop::new(),
             ctl_pop: CtlPop::new(),
-            disc_unfurl: [Spring::at(0.0); 3],
+            disc_unfurl: [Spring::at(0.0); hero::DISC_SLOTS],
             season_metrics: season::Metrics::new(),
             about_rows: about::Rows::new(),
             ground,
@@ -2690,6 +2690,7 @@ impl DetailScreen {
                         hero::HeroCtl::Trailer => plx_ui::icons::Icon::Trailer,
                         hero::HeroCtl::MarkWatched => plx_ui::icons::Icon::Check,
                         hero::HeroCtl::MarkUnwatched => plx_ui::icons::Icon::Minus,
+                        hero::HeroCtl::GoToShow => plx_ui::icons::Icon::Show,
                         _ => unreachable!(),
                     };
                     let mut button = CircleButton::new(c"".as_ptr())
@@ -3664,15 +3665,16 @@ impl DetailScreen {
     }
 
     fn hero_set(&self, meta: plx_data::metadata::MetadataView<'_>) -> hero::HeroSet {
-        let (restart, mark) = self
+        let (restart, mark, show) = self
             .detail(meta)
             .map(|d| {
                 (
                     hero::has_restart(hero::hero_resume_ns(d)),
                     hero::hero_mark(d),
+                    hero::go_show_target(d).is_some(),
                 )
             })
-            .unwrap_or((false, PosterMark::None));
+            .unwrap_or((false, PosterMark::None, false));
         // The preview path replaced the disc. Play Trailer stays in the item menu. (Confirmed as
         // the shipped decision by `screens::detail::tests` — see
         // `a_movie_trailer_disc_plays_the_extra_from_the_start` et al., which explicitly assert
@@ -3683,6 +3685,7 @@ impl DetailScreen {
             trailer: false,
             alt: self.alt_available(meta),
             mark,
+            show,
         }
     }
 
@@ -3864,6 +3867,15 @@ impl DetailScreen {
                         }),
                     );
                 }
+            }
+            hero::HeroCtl::GoToShow => {
+                // The hold menu's Go to Show, from the page: the show, opened on this episode's
+                // season. The app performs it (`ContentReq::OpenShow`) because seeding the season
+                // the show page lands on is the bridge's, not a screen's.
+                let Some(d) = self.detail(meta) else { return };
+                let Some((show_rk, season)) = hero::go_show_target(d) else { return };
+                let req = ContentReq::OpenShow { sid: d.sid, rk: show_rk.to_string(), season };
+                self.content(fx, req);
             }
             hero::HeroCtl::MarkWatched | hero::HeroCtl::MarkUnwatched => {
                 if let Some(d) = self.detail(meta) {

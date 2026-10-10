@@ -40,6 +40,7 @@ pub const ELEM_ALT: u32 = 2;
 pub const ELEM_MARK_WATCHED: u32 = 3;
 pub const ELEM_MARK_UNWATCHED: u32 = 4;
 pub const ELEM_TRAILER: u32 = 5;
+pub const ELEM_GO_SHOW: u32 = 6;
 
 /// The hero's one focus group. Local to this screen — nothing outside `screens::detail` ever names
 /// it — so, like `screens::profiles`'s `ROSTER_GROUP`/`FOOTER_GROUP`, any small integer would do;
@@ -83,6 +84,7 @@ fn mark_show_watched_label() -> &'static CStr { plx_platform::i18n::msg::browse_
 fn mark_show_unwatched_label() -> &'static CStr { plx_platform::i18n::msg::browse_detail_mark_show_unwatched_c() }
 fn play_from_start_label() -> &'static CStr { plx_platform::i18n::msg::browse_detail_play_start_c() }
 fn trailer_label() -> &'static CStr { plx_platform::i18n::msg::browse_detail_trailer_c() }
+fn go_show_label() -> &'static CStr { plx_platform::i18n::msg::browse_menu_go_show_c() }
 
 /// A control in the hero action row, named rather than numbered — ported verbatim from
 /// `ui/detail.rs::HeroCtl`.
@@ -101,6 +103,9 @@ pub enum HeroCtl {
     MarkWatched,
     /// the − face of that same toggle — worn once the item IS watched
     MarkUnwatched,
+    /// the show disc, present only on an EPISODE's page that knows its show — the way from an
+    /// episode to its season and its neighbours, which the page otherwise does not offer
+    GoToShow,
 }
 
 impl HeroCtl {
@@ -113,9 +118,10 @@ impl HeroCtl {
             HeroCtl::Alt => ELEM_ALT,
             HeroCtl::MarkWatched => ELEM_MARK_WATCHED,
             HeroCtl::MarkUnwatched => ELEM_MARK_UNWATCHED,
+            HeroCtl::GoToShow => ELEM_GO_SHOW,
         }
     }
-    /// The inverse of [`elem`](Self::elem) — `None` for any `u32` outside the six identities
+    /// The inverse of [`elem`](Self::elem) — `None` for any `u32` outside the seven identities
     /// above, which is every elem a NON-hero group can mint (the completed sections use
     /// their own disjoint range, per the module doc).
     pub fn of_elem(e: u32) -> Option<Self> {
@@ -126,6 +132,7 @@ impl HeroCtl {
             ELEM_ALT => Some(HeroCtl::Alt),
             ELEM_MARK_WATCHED => Some(HeroCtl::MarkWatched),
             ELEM_MARK_UNWATCHED => Some(HeroCtl::MarkUnwatched),
+            ELEM_GO_SHOW => Some(HeroCtl::GoToShow),
             _ => None,
         }
     }
@@ -135,22 +142,30 @@ impl HeroCtl {
     }
 }
 
-/// Which of the conditional controls the row is showing: the three independent bits (restart,
-/// trailer, Also available), plus the item's watch state, which decides which FACE the watched
-/// toggle wears.
+/// Which of the conditional controls the row is showing: the four independent bits (restart,
+/// trailer, Also available, Go to Show), plus the item's watch state, which decides which FACE the
+/// watched toggle wears.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct HeroSet {
     pub restart: bool,
     pub trailer: bool,
     pub alt: bool,
     pub mark: PosterMark,
+    pub show: bool,
 }
 
-/// The row's controls, in drawn order, for a given set. A fixed 5-slot array (Play + Restart +
-/// Trailer + Alt + one watch face is the widest the row ever gets) plus a live count, so no
-/// per-frame allocation.
-pub fn hero_ctls(set: HeroSet) -> ([HeroCtl; 5], usize) {
-    let mut v = [HeroCtl::Play; 5];
+/// The widest the row ever gets: Play + Restart + Trailer + Alt + one watch face + Go to Show.
+pub const HERO_MAX: usize = 6;
+
+/// The row's controls, in drawn order, for a given set. A fixed [`HERO_MAX`]-slot array plus a
+/// live count, so no per-frame allocation.
+///
+/// Go to Show comes LAST: the row is the item's own verbs first (play it, mark it), and leaving
+/// the page for its show is a different kind of press. It also keeps every existing control at
+/// the index it had, so the watch toggle's place does not depend on whether the item is an
+/// episode.
+pub fn hero_ctls(set: HeroSet) -> ([HeroCtl; HERO_MAX], usize) {
+    let mut v = [HeroCtl::Play; HERO_MAX];
     let mut n = 1;
     if set.restart {
         v[n] = HeroCtl::Restart;
@@ -170,6 +185,10 @@ pub fn hero_ctls(set: HeroSet) -> ([HeroCtl; 5], usize) {
         HeroCtl::MarkWatched
     };
     n += 1;
+    if set.show {
+        v[n] = HeroCtl::GoToShow;
+        n += 1;
+    }
     (v, n)
 }
 
@@ -202,12 +221,12 @@ pub fn focusable(ctl: HeroCtl, full_trailer: bool) -> bool {
 /// presentation mode. Every call site that enumerates the row for focus/hit-testing extent must go
 /// through this rather than `hero_ctls` directly, or the two can disagree about which controls
 /// exist right now.
-pub fn visible_ctls(set: HeroSet, full_trailer: bool) -> ([HeroCtl; 5], usize) {
+pub fn visible_ctls(set: HeroSet, full_trailer: bool) -> ([HeroCtl; HERO_MAX], usize) {
     let (all, n) = hero_ctls(set);
     if !full_trailer {
         return (all, n);
     }
-    let mut v = [HeroCtl::Play; 5];
+    let mut v = [HeroCtl::Play; HERO_MAX];
     let mut count = 0;
     for &c in &all[..n] {
         if focusable(c, full_trailer) {
@@ -301,11 +320,27 @@ pub fn watch_names_show(d: &Detail) -> bool {
     hero_episode(d).is_some()
 }
 
-/// A disc's slot (`[restart, trailer, watch]`) and the verb it unfurls to — `None` for the two PILLS.
+/// Where an EPISODE's page sends Go to Show: its show's rk and the season to open on. `None` for
+/// anything that is not an episode, and for an episode that arrived without a
+/// grandparentRatingKey — a disc whose target is missing is simply absent, the item menu's own
+/// rule (`item_menu::build_with`), rather than a press that lands on a blank page.
+pub fn go_show_target(d: &Detail) -> Option<(&str, c_int)> {
+    if d.kind != "episode" || d.show_rk.is_empty() {
+        return None;
+    }
+    Some((d.show_rk.as_str(), c_int::try_from(d.season).unwrap_or(0).max(0)))
+}
+
+/// The number of discs [`disc_verb`] names a slot for.
+pub const DISC_SLOTS: usize = 4;
+
+/// A disc's slot (`[restart, trailer, watch, show]`) and the verb it unfurls to — `None` for the
+/// two PILLS.
 pub fn disc_verb(ctl: HeroCtl, name_show: bool) -> Option<(usize, &'static CStr)> {
     match (ctl, name_show) {
         (HeroCtl::Restart, _) => Some((0, play_from_start_label())),
         (HeroCtl::Trailer, _) => Some((1, trailer_label())),
+        (HeroCtl::GoToShow, _) => Some((3, go_show_label())),
         (HeroCtl::MarkWatched, false) => Some((2, mark_watched_label())),
         (HeroCtl::MarkWatched, true) => Some((2, mark_show_watched_label())),
         (HeroCtl::MarkUnwatched, false) => Some((2, mark_unwatched_label())),
@@ -369,8 +404,8 @@ pub fn alt_pill_w(measure: &dyn Measure) -> f32 {
 pub struct HeroWidths {
     pub pill: f32,
     pub alt: f32,
-    /// the three discs, in [`disc_verb`]'s slot order, each already unfurled
-    pub disc: [f32; 3],
+    /// the discs, in [`disc_verb`]'s slot order, each already unfurled
+    pub disc: [f32; DISC_SLOTS],
 }
 
 /// The accumulation itself, PURE: the drawn frame of control `i` in `set`, given both pills'
@@ -386,6 +421,7 @@ pub fn hero_btn_rect_at(set: HeroSet, i: usize, y: f32, cw: HeroWidths) -> Rect 
             HeroCtl::Restart => cw.disc[0],
             HeroCtl::Trailer => cw.disc[1],
             HeroCtl::MarkWatched | HeroCtl::MarkUnwatched => cw.disc[2],
+            HeroCtl::GoToShow => cw.disc[3],
         };
         if k >= i {
             break;
@@ -400,16 +436,17 @@ pub fn hero_btn_rect_at(set: HeroSet, i: usize, y: f32, cw: HeroWidths) -> Rect 
 ///
 /// The widest verb must fit wholly before the People column as a single extra, and the last
 /// control of the trial layout must still sit at or before [`FACTS_R`] — otherwise every disc
-/// remains a circle. Three discs can unfurl at once (Restart + Trailer + Watch), so a pair-wide
-/// budget is not enough: two extras that each fit can still push Watch across the People column.
+/// remains a circle. Several discs can unfurl at once (Restart + Trailer + Watch + Go to Show), so a
+/// pair-wide budget is not enough: two extras that each fit can still push the last disc across the
+/// People column.
 pub fn disc_caps(
     measure: &dyn Measure,
     set: HeroSet,
-    unfurl: [f32; 3],
+    unfurl: [f32; DISC_SLOTS],
     named_show: bool,
-) -> [f32; 3] {
+) -> [f32; DISC_SLOTS] {
     let (v, n) = hero_ctls(set);
-    let mut label_w = [0.0f32; 3];
+    let mut label_w = [0.0f32; DISC_SLOTS];
     for &c in &v[..n] {
         if let Some((slot, label)) = disc_verb(c, named_show) {
             label_w[slot] = measure.width(label, theme::size::BODY, true);
@@ -428,25 +465,22 @@ pub(super) fn disc_caps_at(
     set: HeroSet,
     pill: f32,
     alt: f32,
-    unfurl: [f32; 3],
-    label_w: [f32; 3],
-) -> [f32; 3] {
+    unfurl: [f32; DISC_SLOTS],
+    label_w: [f32; DISC_SLOTS],
+) -> [f32; DISC_SLOTS] {
     let (_, n) = hero_ctls(set);
     let closed = HeroWidths {
         pill,
         alt,
-        disc: [CD; 3],
+        disc: [CD; DISC_SLOTS],
     };
     let last = hero_btn_rect_at(set, n.saturating_sub(1), 0.0, closed);
     let budget = CircleButton::label_budget(CD, FACTS_R - (last.x + last.w));
     if label_w.iter().copied().fold(0.0f32, f32::max) > budget {
-        return [CD; 3];
+        return [CD; DISC_SLOTS];
     }
-    let open = [
-        CircleButton::cap_w(CD, unfurl[0], label_w[0]),
-        CircleButton::cap_w(CD, unfurl[1], label_w[1]),
-        CircleButton::cap_w(CD, unfurl[2], label_w[2]),
-    ];
+    let open: [f32; DISC_SLOTS] =
+        std::array::from_fn(|slot| CircleButton::cap_w(CD, unfurl[slot], label_w[slot]));
     let last_open = hero_btn_rect_at(
         set,
         n.saturating_sub(1),
@@ -458,7 +492,7 @@ pub(super) fn disc_caps_at(
         },
     );
     if last_open.x + last_open.w > FACTS_R + 0.01 {
-        return [CD; 3];
+        return [CD; DISC_SLOTS];
     }
     open
 }
@@ -470,7 +504,7 @@ pub fn hero_widths(
     measure: &dyn Measure,
     set: HeroSet,
     has_restart: bool,
-    unfurl: [f32; 3],
+    unfurl: [f32; DISC_SLOTS],
     named_show: bool,
 ) -> HeroWidths {
     HeroWidths {
@@ -850,6 +884,7 @@ mod tests {
             trailer,
             alt,
             mark,
+            show: false,
         }
     }
 
@@ -1031,19 +1066,21 @@ mod tests {
         let cw = HeroWidths {
             pill: 200.0,
             alt: 260.0,
-            disc: [CD, CD, CD],
+            disc: [CD; DISC_SLOTS],
         };
         for restart in [false, true] {
             for alt in [false, true] {
                 for trailer in [false, true] {
                     for mark in [PosterMark::None, PosterMark::Watched] {
-                        let s = set_full(restart, alt, mark, trailer);
-                        let (_, n) = hero_ctls(s);
-                        let mut prev_right = f32::MIN;
-                        for i in 0..n {
-                            let r = hero_btn_rect_at(s, i, 0.0, cw);
-                            assert!(r.x >= prev_right, "set={s:?} i={i} rect={r:?}");
-                            prev_right = r.x + r.w;
+                        for show in [false, true] {
+                            let s = HeroSet { show, ..set_full(restart, alt, mark, trailer) };
+                            let (_, n) = hero_ctls(s);
+                            let mut prev_right = f32::MIN;
+                            for i in 0..n {
+                                let r = hero_btn_rect_at(s, i, 0.0, cw);
+                                assert!(r.x >= prev_right, "set={s:?} i={i} rect={r:?}");
+                                prev_right = r.x + r.w;
+                            }
                         }
                     }
                 }
@@ -1062,17 +1099,20 @@ mod tests {
                         PosterMark::InProgress,
                         PosterMark::Watched,
                     ] {
-                        let s = set_full(restart, alt, mark, trailer);
-                        let (_, n) = hero_ctls(s);
-                        for i in 0..n {
-                            let ctl = ctl_at(s, i).unwrap();
-                            assert_eq!(index_of(s, ctl), Some(i));
+                        for show in [false, true] {
+                            let s = HeroSet { show, ..set_full(restart, alt, mark, trailer) };
+                            let (_, n) = hero_ctls(s);
+                            for i in 0..n {
+                                let ctl = ctl_at(s, i).unwrap();
+                                assert_eq!(index_of(s, ctl), Some(i));
+                                assert_eq!(HeroCtl::of_elem(ctl.elem()), Some(ctl));
+                            }
+                            assert_eq!(
+                                ctl_at(s, n),
+                                None,
+                                "one past the end is None, never a panic"
+                            );
                         }
-                        assert_eq!(
-                            ctl_at(s, n),
-                            None,
-                            "one past the end is None, never a panic"
-                        );
                     }
                 }
             }
@@ -1260,6 +1300,7 @@ mod tests {
             trailer: false,
             alt: false,
             mark: PosterMark::Watched,
+            show: false,
         };
         let (controls, n) = hero_ctls(set);
         assert_eq!(
@@ -1275,6 +1316,7 @@ mod tests {
             trailer: false,
             alt: false,
             mark: PosterMark::None,
+            show: false,
         };
         let with = HeroSet {
             alt: true,
@@ -1293,6 +1335,7 @@ mod tests {
                     trailer,
                     alt,
                     mark: PosterMark::InProgress,
+                    show: false,
                 };
                 let (controls, n) = hero_ctls(set);
                 assert!(controls[..n].iter().all(|ctl| matches!(
@@ -1413,12 +1456,14 @@ mod tests {
             trailer: false,
             alt: false,
             mark: PosterMark::None,
+            show: false,
         };
         let wide = HeroSet {
             restart: true,
             trailer: false,
             alt: true,
             mark: PosterMark::None,
+            show: false,
         };
         assert_eq!(ctl_at(compact, 1), Some(HeroCtl::MarkWatched));
         assert_eq!(ctl_at(wide, 1), Some(HeroCtl::Restart));
@@ -1432,11 +1477,12 @@ mod tests {
             trailer: false,
             alt: true,
             mark: PosterMark::None,
+            show: true,
         };
         let widths = HeroWidths {
             pill: 210.0,
             alt: 300.0,
-            disc: [90.0, 120.0, 120.0],
+            disc: [90.0, 120.0, 120.0, 150.0],
         };
         let (controls, n) = hero_ctls(set);
         for i in 1..n {
@@ -1462,34 +1508,37 @@ mod tests {
                         PosterMark::InProgress,
                         PosterMark::Watched,
                     ] {
-                        let set = set_full(restart, alt, mark, trailer);
-                        let (_, n) = hero_ctls(set);
-                        for labels in [
-                            [10.0, 12.0, 12.0],
-                            [201.0, 80.0, 316.0],
-                            [400.0, 400.0, 400.0],
-                            [900.0, 40.0, 40.0],
-                        ] {
-                            for e in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
-                                for unfurl in [
-                                    [e, 0.0, 1.0 - e],
-                                    [1.0 - e, 0.0, e],
-                                    [e, e, 0.0],
-                                    [0.0, e, e],
-                                ] {
-                                    let disc = disc_caps_at(set, PW + 62.0, 340.0, unfurl, labels);
-                                    let last = hero_btn_rect_at(
-                                        set,
-                                        n - 1,
-                                        0.0,
-                                        HeroWidths {
-                                            pill: PW + 62.0,
-                                            alt: 340.0,
-                                            disc,
-                                        },
-                                    );
-                                    assert!(last.x + last.w <= FACTS_R + 0.01);
-                                    opened |= disc.iter().any(|width| *width > CD);
+                        for show in [false, true] {
+                            let set = HeroSet { show, ..set_full(restart, alt, mark, trailer) };
+                            let (_, n) = hero_ctls(set);
+                            for labels in [
+                                [10.0, 12.0, 12.0, 14.0],
+                                [201.0, 80.0, 316.0, 180.0],
+                                [400.0, 400.0, 400.0, 400.0],
+                                [900.0, 40.0, 40.0, 40.0],
+                            ] {
+                                for e in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
+                                    for unfurl in [
+                                        [e, 0.0, 1.0 - e, 0.0],
+                                        [1.0 - e, 0.0, e, 0.0],
+                                        [e, e, 0.0, 0.0],
+                                        [0.0, e, e, 0.0],
+                                        [0.0, 0.0, 1.0 - e, e],
+                                    ] {
+                                        let disc = disc_caps_at(set, PW + 62.0, 340.0, unfurl, labels);
+                                        let last = hero_btn_rect_at(
+                                            set,
+                                            n - 1,
+                                            0.0,
+                                            HeroWidths {
+                                                pill: PW + 62.0,
+                                                alt: 340.0,
+                                                disc,
+                                            },
+                                        );
+                                        assert!(last.x + last.w <= FACTS_R + 0.01);
+                                        opened |= disc.iter().any(|width| *width > CD);
+                                    }
                                 }
                             }
                         }
@@ -1508,8 +1557,9 @@ mod tests {
             trailer: true,
             alt: true,
             mark: PosterMark::Watched,
+            show: true,
         };
-        let caps = disc_caps(&measure, wide, [1.0, 1.0, 1.0], true);
+        let caps = disc_caps(&measure, wide, [1.0; DISC_SLOTS], true);
         let (_, n) = hero_ctls(wide);
         let last = hero_btn_rect_at(
             wide,
@@ -1523,7 +1573,7 @@ mod tests {
         );
         assert!(
             last.x + last.w <= FACTS_R + 0.01,
-            "the 5-control row collapses rather than crossing People"
+            "the 6-control row collapses rather than crossing People"
         );
 
         let roomy = HeroSet {
@@ -1531,10 +1581,12 @@ mod tests {
             trailer: true,
             alt: false,
             mark: PosterMark::Watched,
+            show: true,
         };
-        let caps = disc_caps(&measure, roomy, [1.0, 1.0, 1.0], false);
+        let caps = disc_caps(&measure, roomy, [1.0; DISC_SLOTS], false);
         assert!(caps[1] > CD, "Trailer unfurls when the row has room");
         assert!(caps[2] > CD, "Watch unfurls when the row has room");
+        assert!(caps[3] > CD, "Go to Show unfurls when the row has room");
     }
 
     struct HugeMeasure;
@@ -1557,8 +1609,9 @@ mod tests {
             trailer: true,
             alt: true,
             mark: PosterMark::Watched,
+            show: true,
         };
-        assert_eq!(disc_caps(&HugeMeasure, set, [1.0, 1.0, 1.0], true), [CD; 3]);
+        assert_eq!(disc_caps(&HugeMeasure, set, [1.0; DISC_SLOTS], true), [CD; DISC_SLOTS]);
     }
 
     #[test]
@@ -1587,6 +1640,14 @@ mod tests {
                 .unwrap(),
             "Mark Show as Unwatched"
         );
+        assert_eq!(
+            disc_verb(HeroCtl::GoToShow, false)
+                .unwrap()
+                .1
+                .to_str()
+                .unwrap(),
+            "Go to Show"
+        );
     }
 
     #[test]
@@ -1596,8 +1657,10 @@ mod tests {
             trailer: true,
             alt: true,
             mark: PosterMark::InProgress,
+            show: true,
         };
         let (_, n) = hero_ctls(set);
+        assert_eq!(n, HERO_MAX, "this is the widest row the hero can build");
         let last = hero_btn_rect_at(
             set,
             n - 1,
@@ -1605,10 +1668,48 @@ mod tests {
             HeroWidths {
                 pill: PW + 62.0,
                 alt: 340.0,
-                disc: [CD; 3],
+                disc: [CD; DISC_SLOTS],
             },
         );
         assert!(last.x + last.w < FACTS_R);
+    }
+
+    #[test]
+    fn go_to_show_comes_last_and_moves_no_other_control() {
+        let without = set(true, true, PosterMark::InProgress);
+        let with = HeroSet { show: true, ..without };
+        let (before, n) = hero_ctls(without);
+        let (after, m) = hero_ctls(with);
+        assert_eq!(m, n + 1);
+        assert_eq!(&after[..n], &before[..n], "every existing control keeps its index");
+        assert_eq!(after[n], HeroCtl::GoToShow);
+        assert_eq!(watch_index(with), watch_index(without));
+        assert!(index_of(without, HeroCtl::GoToShow).is_none());
+    }
+
+    #[test]
+    fn go_to_show_targets_an_episode_s_show_and_season_only() {
+        let episode = Detail {
+            kind: "episode".into(),
+            show_rk: "100".into(),
+            season: 3,
+            ..Default::default()
+        };
+        assert_eq!(go_show_target(&episode), Some(("100", 3)));
+
+        // the item menu's rule: no target, no control
+        let orphan = Detail { show_rk: String::new(), ..episode.clone() };
+        assert_eq!(go_show_target(&orphan), None);
+
+        // a show or a season page IS the show; a movie has none
+        for kind in ["show", "season", "movie"] {
+            let other = Detail { kind: kind.into(), ..episode.clone() };
+            assert_eq!(go_show_target(&other), None, "{kind}");
+        }
+
+        // a season the server did not send opens the show on its default season
+        let unknown = Detail { season: -1, ..episode.clone() };
+        assert_eq!(go_show_target(&unknown), Some(("100", 0)));
     }
 
     #[test]

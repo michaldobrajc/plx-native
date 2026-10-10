@@ -1,6 +1,7 @@
-{"updated":"2026-10-10T13:19:49Z",
+{"updated":"2026-10-10T13:35:20Z",
 "ci":[
-{"id":38054910301,"at":"2026-10-10T13:13:42Z","sha":"0d4c3b3bc","title":"fork: pipeline check (throwaway)","pr":1,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"host unit tests (hostsim)":227,"host unit tests (default features)":289,"host python/shell/C gates":135,"host harness tests":106,"cross-build (armv7) + artifact assertions":355,"host lint + type-checks":156,"host checks (NOT a device gate)":3}}
+{"id":38054910301,"at":"2026-10-10T13:13:42Z","sha":"0d4c3b3bc","title":"fork: pipeline check (throwaway)","pr":1,"event":"pull_request","conclusion":"success","attempt":1,"jobs":{"host unit tests (hostsim)":227,"host unit tests (default features)":289,"host python/shell/C gates":135,"host harness tests":106,"cross-build (armv7) + artifact assertions":355,"host lint + type-checks":156,"host checks (NOT a device gate)":3}},
+{"id":38055891821,"at":"2026-10-10T13:29:14Z","sha":"e644b9757","title":"Detail: Go to Show disc on an episode's page","pr":2,"event":"pull_request","conclusion":"failure","attempt":1,"jobs":{"cross-build (armv7) + artifact assertions":355,"host harness tests":147,"host python/shell/C gates":117},"failed":["host checks (NOT a device gate)","host lint + type-checks","host unit tests (default features)","host unit tests (hostsim)"]}
 ],
 "sim":[],
 "nightly":[],

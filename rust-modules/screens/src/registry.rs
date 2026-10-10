@@ -838,6 +838,11 @@ pub const PAGE_MEMORY_SHAPE: &str = "PageMemory{None,Detail:{spot:Spot{section:i
 /// Effects cross the screen/loop boundary; screens do not poll one another's pending latches.
 pub enum ContentReq {
     Push(ContentArg),
+    /// **Open a show's page on one of its seasons** — an episode page's Go to Show. Not a
+    /// [`ContentReq::Push`]: which season the page lands on is seeded by the bridge before the
+    /// push (`bridge::open_detail`, the hold menu's own path), and a screen cannot reach it.
+    /// `season` is the season NUMBER, `0` when unknown (the show page then opens on its default).
+    OpenShow { sid: plx_plex::plex::ServerId, rk: String, season: std::os::raw::c_int },
     Present(ContentArg),
     Back,
     Play { play: PlayIntent, resume_ns: i64 },

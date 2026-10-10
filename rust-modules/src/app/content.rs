@@ -516,6 +516,13 @@ pub(crate) fn content_requests(app: &mut App, fr: &Frame) {
                 // BACK must return them to where they pressed.
                 bridge::nav_push_with_return(&mut app.pages, AppArg::Content(arg), ret);
             }
+            ContentReq::OpenShow { sid, rk, season } => {
+                halt_preview(app);
+                // The same open as the hold menu's Go to Show (`input::apply_item_action`), with
+                // the page's own `ret` so BACK returns to the episode where it was pressed.
+                bridge::open_detail(&mut app.pages, &mut app.bridge, sid, &rk,
+                    (season > 0).then_some(season), Some(ret));
+            }
             ContentReq::Present(arg) => {
                 halt_preview(app);
                 app.pages.nav.next_style = plx_ui::containers::modal::Style::Opaque { snapshot: true };

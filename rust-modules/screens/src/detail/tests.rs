@@ -145,7 +145,7 @@ pub(super) fn bare_held(sid: ServerId, rk: &str) -> DetailScreen {
         tabs: TabStrip::new(),
         season_pop: CtlPop::new(),
         ctl_pop: CtlPop::new(),
-        disc_unfurl: [Spring::at(0.0); 3],
+        disc_unfurl: [Spring::at(0.0); hero::DISC_SLOTS],
         season_metrics: season::Metrics::new(),
         about_rows: about::Rows::new(),
         ground: AmbientWash::flat(theme::SURFACE_APP),
@@ -983,6 +983,7 @@ fn hero_focus_survives_a_control_appearing_in_the_middle_of_the_row() {
         trailer: false,
         alt: false,
         mark: PosterMark::None,
+        show: false,
     };
     let after = hero::HeroSet {
         alt: true,
@@ -1145,11 +1146,12 @@ fn a_pointer_lands_on_the_capsule_the_unfurl_drew() {
         trailer: false,
         alt: false,
         mark: PosterMark::InProgress,
+        show: false,
     };
     let index = hero::watch_index(set).unwrap();
     assert_eq!(hero::ctl_at(set, index - 1), Some(hero::HeroCtl::Restart));
     for unfurl in [0.2, 0.6, 1.0] {
-        let disc = hero::disc_caps_at(set, 230.0, 0.0, [0.0, 0.0, unfurl], [201.0, 0.0, 267.0]);
+        let disc = hero::disc_caps_at(set, 230.0, 0.0, [0.0, 0.0, unfurl, 0.0], [201.0, 0.0, 267.0, 0.0]);
         let widths = hero::HeroWidths {
             pill: 230.0,
             alt: 0.0,
@@ -1220,12 +1222,12 @@ fn hero_action_row_hit_matches_the_drawn_controls_at_every_set_size() {
                     assert_eq!(n, 2 + usize::from(restart) + usize::from(alt));
                     sizes.insert(n);
                     for unfurl in [
-                        [0.0, 0.0, 0.0],
-                        [0.0, 0.0, 1.0],
-                        [0.0, 1.0, 0.0],
-                        [0.3, 0.0, 0.7],
-                        [1.0, 0.0, 0.0],
-                        [0.0, 1.0, 1.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0],
+                        [0.3, 0.0, 0.7, 0.0],
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 1.0, 0.0],
                     ] {
                         screen.disc_unfurl = unfurl.map(Spring::at);
                         for scroll in [0.0, 48.0] {
@@ -2284,6 +2286,78 @@ fn play_item(effects: &[plx_machine::machine::Stamped<TestHost>]) -> Option<(&Pl
         Fx::App(AppFx::Content(ContentReq::Play { play, resume_ns })) => Some((play, *resume_ns)),
         _ => None,
     })
+}
+
+#[test]
+fn an_episode_page_offers_go_to_show_and_it_opens_the_show_on_the_episode_s_season() {
+    let _guard = install(Detail {
+        sid: ServerId::UNSET,
+        rk: "ep".into(),
+        kind: "episode".into(),
+        title: "Pilot".into(),
+        show_rk: "show".into(),
+        show_title: "Show".into(),
+        season: 2,
+        index: 1,
+        ..Default::default()
+    });
+    let mut screen = bare(&_guard, ServerId::UNSET, "ep");
+    let set = screen.hero_set(test_store().view());
+    assert!(set.show, "an episode that knows its show offers the disc");
+    assert_eq!(
+        hero::index_of(set, hero::HeroCtl::GoToShow),
+        Some(hero::hero_ctls(set).1 - 1),
+        "Go to Show is the row's last control"
+    );
+    let (_, effects) = step(
+        &mut screen,
+        &ScreenEvent::Activate(hero::ELEM_GO_SHOW),
+        Some(hero::ELEM_GO_SHOW),
+    );
+    let opened: Vec<_> = effects
+        .iter()
+        .filter_map(|effect| match &effect.fx {
+            Fx::App(AppFx::Content(ContentReq::OpenShow { sid, rk, season })) => {
+                Some((*sid, rk.clone(), *season))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(opened, vec![(ServerId::UNSET, "show".to_string(), 2)]);
+    assert!(
+        play_item(&effects).is_none(),
+        "leaving for the show never starts playback"
+    );
+    clear();
+}
+
+#[test]
+fn a_movie_page_and_a_show_page_offer_no_go_to_show() {
+    for (kind, show_rk) in [("movie", ""), ("show", ""), ("episode", "")] {
+        let _guard = install(Detail {
+            sid: ServerId::UNSET,
+            rk: "item".into(),
+            kind: kind.into(),
+            show_rk: show_rk.into(),
+            season: 1,
+            ..Default::default()
+        });
+        let mut screen = bare(&_guard, ServerId::UNSET, "item");
+        assert!(!screen.hero_set(test_store().view()).show, "{kind}");
+        // a press that reaches the id anyway (a stale pointer stop) does nothing
+        let (_, effects) = step(
+            &mut screen,
+            &ScreenEvent::Activate(hero::ELEM_GO_SHOW),
+            Some(hero::ELEM_GO_SHOW),
+        );
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect.fx, Fx::App(AppFx::Content(ContentReq::OpenShow { .. })))),
+            "{kind}"
+        );
+        clear();
+    }
 }
 
 #[test]

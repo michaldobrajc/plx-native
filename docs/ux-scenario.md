@@ -377,6 +377,7 @@ The action row:
 | **Play** / **Resume** | start, or resume from the stored position |
 | **↺** | play from the start (shown when there is a resume point) |
 | the watched disc | toggle watched — it **wears the face of the write it would perform**, so it is a **✓** on an unwatched item and a **−** on a watched one |
+| **Go to Show** | on an episode's page only, last in the row: open the show on that episode's season |
 
 Below, **Cast & Crew** — OK on a headshot opens that person's page, from which their other titles
 lead back into more detail pages. The BACK trail unwinds the whole chain.
